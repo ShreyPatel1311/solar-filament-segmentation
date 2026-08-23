@@ -1,17 +1,29 @@
-"""Thin wrapper around the MAGFiLO COCO annotation file.
+"""Thin reader for the MAGFiLO COCO annotation file.
 
 Only the segmentation masks are used; the dataset's bounding boxes, spines and
 class labels are deliberately ignored, per the challenge's scope.
+
+This deliberately does not instantiate ``pycocotools.coco.COCO``. Its index
+(``self.imgs``, ``getImgIds`` / ``loadImgs`` / ``getAnnIds`` / ``annToMask``)
+assumes ``images[].id`` and ``annotations[].image_id`` share one consistent
+type across the whole file; MAGFiLO's export does not guarantee that; e.g. a
+mix of int and string ids across records reliably reproduces the exact crash
+seen on the real training file (``KeyError`` inside ``loadImgs``, even though
+the id came straight out of ``getImgIds()``). Reading the JSON ourselves and
+normalizing every id to ``str`` up front — the same normalization on both
+sides of the join — sidesteps the whole class of mismatch, and
+``pycocotools.mask``'s pure encode/decode functions need no index at all.
 """
 
 from __future__ import annotations
 
+import json
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 from pycocotools import mask as mask_utils
-from pycocotools.coco import COCO
 
 IMAGE_SIZE = 2048  # every MAGFiLO frame is 2048 x 2048
 
@@ -20,7 +32,7 @@ IMAGE_SIZE = 2048  # every MAGFiLO frame is 2048 x 2048
 class ImageRecord:
     """One annotated H-alpha observation."""
 
-    image_id: int
+    image_id: str
     file_name: str
     height: int
     width: int
@@ -31,33 +43,52 @@ class ImageRecord:
         return Path(self.file_name).stem
 
 
+def _segmentation_to_mask(segmentation, height: int, width: int) -> np.ndarray:
+    """Polygon or RLE annotation -> binary mask, without touching a COCO index."""
+    if isinstance(segmentation, list):
+        rle = mask_utils.merge(mask_utils.frPyObjects(segmentation, height, width))
+    elif isinstance(segmentation.get("counts"), list):
+        rle = mask_utils.frPyObjects(segmentation, height, width)
+    else:
+        rle = segmentation
+    mask = mask_utils.decode(rle)
+    return mask[..., 0] if mask.ndim == 3 else mask
+
+
 class MagfiloAnnotations:
     """Read-only view over the training annotations."""
 
     def __init__(self, annotation_file: str | Path):
-        self.coco = COCO(str(annotation_file))
+        payload = json.loads(Path(annotation_file).read_text())
+
+        self._images: dict[str, dict] = {
+            str(img["id"]): img for img in payload.get("images", [])
+        }
+        self._anns_by_image: dict[str, list[dict]] = defaultdict(list)
+        for ann in payload.get("annotations", []):
+            if ann.get("iscrowd"):
+                continue
+            self._anns_by_image[str(ann["image_id"])].append(ann)
 
     @property
     def records(self) -> list[ImageRecord]:
-        out = []
-        for image_id in sorted(self.coco.getImgIds()):
-            info = self.coco.loadImgs(image_id)[0]
-            out.append(
-                ImageRecord(
-                    image_id=image_id,
-                    file_name=info["file_name"],
-                    height=int(info.get("height", IMAGE_SIZE)),
-                    width=int(info.get("width", IMAGE_SIZE)),
-                )
+        out = [
+            ImageRecord(
+                image_id=image_id,
+                file_name=info["file_name"],
+                height=int(info.get("height", IMAGE_SIZE)),
+                width=int(info.get("width", IMAGE_SIZE)),
             )
+            for image_id, info in self._images.items()
+        ]
+        out.sort(key=lambda record: record.file_name)
         return out
 
     def instance_masks(self, record: ImageRecord) -> list[np.ndarray]:
         """Per-filament binary masks at native resolution."""
-        anns = self.coco.loadAnns(self.coco.getAnnIds(imgIds=record.image_id, iscrowd=None))
         masks = []
-        for ann in anns:
-            m = self.coco.annToMask(ann)
+        for ann in self._anns_by_image.get(record.image_id, []):
+            m = _segmentation_to_mask(ann["segmentation"], record.height, record.width)
             if m.shape != (record.height, record.width):
                 continue
             if m.any():
