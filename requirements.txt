@@ -1,0 +1,15 @@
+# Pinned to the versions used on the Kaggle GPU T4x2 image (2026.07).
+# torch/torchvision are preinstalled on Kaggle; listed here for local parity.
+torch==2.4.0
+torchvision==0.19.0
+numpy==1.26.4
+opencv-python-headless==4.10.0.84
+pycocotools==2.0.8
+scipy==1.14.1
+scikit-image==0.24.0
+segmentation-models-pytorch==0.3.4
+albumentations==1.4.15
+albucore==0.0.16
+pandas==2.2.2
+tqdm==4.66.5
+PyYAML==6.0.2

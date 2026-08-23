@@ -1,0 +1,23 @@
+# Fast end-to-end check: one short epoch at low resolution, CPU-friendly.
+name: smoke
+
+data:
+  image_size: 256
+  val_fraction: 0.5
+  num_workers: 0
+
+model:
+  architecture: unet
+  encoder: resnet18
+  encoder_weights: null
+  in_channels: 1
+
+train:
+  epochs: 1
+  batch_size: 2
+  amp: false
+
+postprocess:
+  threshold: 0.5
+  min_area: 10
+  closing_radius: 1

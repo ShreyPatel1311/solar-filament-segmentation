@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.venv/
+/artifacts/
+/data/
+*.csv
+*.pt
+*.pth
+submission*.csv
+*.json.gz
+.DS_Store
