@@ -16,3 +16,4 @@ albucore==0.0.16            # must match albumentations 1.4.15; >=0.0.17 breaks 
 pandas==2.2.2
 tqdm==4.66.5
 PyYAML==6.0.2
+huggingface_hub>=0.24   # unpinned floor: avoids fighting a preinstalled transformers/datasets pin

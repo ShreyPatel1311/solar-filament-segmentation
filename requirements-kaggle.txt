@@ -12,3 +12,4 @@ albumentations==1.4.15
 albucore==0.0.16
 pycocotools==2.0.8
 munch==4.0.0
+huggingface_hub>=0.24   # floor, not a pin - avoids downgrading whatever transformers/datasets already installed

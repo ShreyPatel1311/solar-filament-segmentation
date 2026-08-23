@@ -20,14 +20,16 @@ configs/                 experiment definitions (YAML) - one file per run
 requirements.txt         full pinned environment (local / reference)
 requirements-kaggle*.txt the few packages the Kaggle image lacks
 notebooks/
-  kaggle_runner.ipynb    the only notebook: clone, install, train, predict
+  kaggle_runner.ipynb    train (+ optionally push the best checkpoint to HF Hub)
+  kaggle_submit.ipynb    submission-only: pull a checkpoint from HF Hub, predict
 scripts/
-  train.py               fit a model
+  train.py               fit a model; --hf-repo-id pushes the best checkpoint
   evaluate.py            score a checkpoint with the leaderboard metric (PQ)
-  predict.py             write submission.csv for the test set
+  predict.py             write submission.csv; --checkpoint or --hf-repo-id
 src/filseg/
   paths.py               resolves data/output roots for Kaggle vs. local
   config.py              typed config, YAML + `--set section.key=value` overrides
+  hub.py                 push/pull the best checkpoint to a HF Hub model repo
   data/
     coco.py              MAGFiLO annotations, RLE encode/decode
     dataset.py           torch Dataset + dataloaders, deterministic split
@@ -37,31 +39,62 @@ src/filseg/
   engine/
     losses.py            BCE + soft Dice
     metrics.py           Panoptic Quality, Dice, IoU
-    trainer.py           training loop, best-checkpoint tracking
+    trainer.py            training loop, best-checkpoint tracking
   postprocess.py         probability map -> individual filament instances
   inference.py           prediction, TTA, submission writing
-tests/                   unit tests for the metric, RLE and post-processing
+tests/                   unit tests for the metric, RLE, post-processing, HF sync
 ```
 
 ## Running on Kaggle
 
-1. Push your changes to the public GitHub repository.
-2. Open `notebooks/kaggle_runner.ipynb` on Kaggle (*File -> Import Notebook*, or
-   create a notebook and paste its cells).
-3. Attach the competition dataset, enable **Internet** and a **GPU** accelerator.
-4. Edit the first cell only — `REPO_URL`, `REVISION`, `CONFIG`, `OVERRIDES` —
-   and run all cells.
+Training and submission are two separate notebooks, so you can iterate on
+post-processing or TTA and resubmit in minutes without paying for a GPU
+training run each time.
 
-The notebook writes `/kaggle/working/submission.csv`, which you submit directly
-from the notebook output.
+**Train** (`notebooks/kaggle_runner.ipynb`):
+
+1. Push your changes to the public GitHub repository.
+2. Open the notebook on Kaggle (*File -> Import Notebook*, or create a notebook
+   and paste its cells).
+3. Attach the competition dataset, enable **Internet** and a **GPU** accelerator.
+4. Edit the first cell — `REPO_URL`, `REVISION`, `CONFIG`, `OVERRIDES`, and
+   optionally `HF_REPO_ID` (see below) — and run all cells.
+
+It writes `/kaggle/working/submission.csv`, submittable directly from the
+notebook output, and if `HF_REPO_ID` is set, pushes the best checkpoint there.
+
+**Submit from a checkpoint already on HF Hub** (`notebooks/kaggle_submit.ipynb`):
+
+1. Set `REPO_URL`/`REVISION` and `HF_REPO_ID` (the repo `train.py` pushed to)
+   in the first cell, and run all cells. No training code runs here; a GPU is
+   optional.
 
 Dependency versions are pinned in `requirements-kaggle.txt` and
-`requirements-kaggle-nodeps.txt`, not in the notebook, so fixing a broken
+`requirements-kaggle-nodeps.txt`, not in either notebook, so fixing a broken
 dependency is a commit and a re-run rather than a notebook edit. The `--no-deps`
 half exists so pip cannot replace the image's preinstalled CUDA build of torch.
 
 For a final, reproducible run, set `REVISION` to a full commit SHA rather than
-`main`; the notebook prints the commit it actually ran.
+`main`; both notebooks print the commit they actually ran.
+
+### Pushing / pulling checkpoints via Hugging Face Hub
+
+`train.py --hf-repo-id USER/REPO` uploads the best checkpoint to that model
+repo under a fixed filename (`best_model.pt` by default, `--hf-filename` to
+change it). Every push overwrites that same file, so the repo always holds
+exactly one live checkpoint — a new training run's best replaces the old one,
+rather than accumulating one file per run. (Hub keeps prior versions in its own
+git history if you ever need to roll back; the repo's file tree itself never
+grows.)
+
+`predict.py --hf-repo-id USER/REPO` downloads that same file and predicts with
+it, as an alternative to `--checkpoint <local path>` (pass exactly one).
+
+Both need write (`train.py`) or read (`predict.py`) access to the Hub repo via
+`HF_TOKEN` — set it as a Kaggle secret (*Add-ons -> Secrets*, name it
+`HF_TOKEN`) and both notebooks load it automatically; locally, `export
+HF_TOKEN=hf_...` or pass `--hf-token`. A public model repo only needs a token
+for `train.py`'s push.
 
 ## Running locally
 
@@ -90,6 +123,14 @@ python scripts/train.py --config configs/unet_resnet34.yaml --set train.epochs=2
 | --- | --- | --- |
 | `FILSEG_DATA_ROOT` | Dataset root containing `train/` and `test/` | auto-detected (`/kaggle/input/...` or `./data`) |
 | `FILSEG_OUTPUT_ROOT` | Where checkpoints and submissions go | `/kaggle/working` on Kaggle, else `./artifacts` |
+| `HF_TOKEN` | Hugging Face token for `--hf-repo-id` (or pass `--hf-token`) | none |
+
+To push/pull via HF Hub locally, the same flags as on Kaggle apply:
+
+```bash
+python scripts/train.py   --config configs/unet_resnet34.yaml --hf-repo-id you/filament-unet-r34
+python scripts/predict.py --hf-repo-id you/filament-unet-r34
+```
 
 ## Method
 

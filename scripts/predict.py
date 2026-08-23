@@ -2,6 +2,7 @@
 """Run a trained checkpoint over the test set and write submission.csv.
 
     python scripts/predict.py --checkpoint artifacts/checkpoints/unet_r34_best.pt
+    python scripts/predict.py --hf-repo-id me/filament-unet-r34
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from pathlib import Path
 
 import torch
 
+from filseg import hub
 from filseg.config import config_from_dict, load_config, parse_overrides
 from filseg.inference import iter_submission_rows, list_test_images, write_submission
 from filseg.models.build import load_checkpoint
@@ -27,7 +29,13 @@ logger = get_logger("predict")
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--checkpoint", type=Path, required=True)
+    parser.add_argument("--checkpoint", type=Path, default=None,
+                        help="Local checkpoint. Mutually exclusive with --hf-repo-id.")
+    parser.add_argument("--hf-repo-id", default=None, metavar="USER/REPO",
+                        help="Download the checkpoint from this Hub model repo instead of "
+                             "--checkpoint.")
+    parser.add_argument("--hf-filename", default=hub.DEFAULT_FILENAME)
+    parser.add_argument("--hf-token", default=None, help="Defaults to the HF_TOKEN env var.")
     parser.add_argument("--config", type=Path, default=None,
                         help="Defaults to the config stored inside the checkpoint.")
     parser.add_argument("--data-root", type=Path, default=None)
@@ -38,7 +46,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-tta", action="store_true", help="Disable flip test-time averaging.")
     parser.add_argument("--set", dest="overrides", action="append", default=[],
                         metavar="section.key=value")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if bool(args.checkpoint) == bool(args.hf_repo_id):
+        parser.error("pass exactly one of --checkpoint or --hf-repo-id")
+    return args
 
 
 def main() -> None:
@@ -46,8 +57,17 @@ def main() -> None:
     paths = resolve_paths(args.data_root, args.output_root)
     paths.ensure_output_dirs()
 
+    if args.hf_repo_id:
+        checkpoint_path = hub.download_checkpoint(
+            args.hf_repo_id, filename=args.hf_filename,
+            local_dir=paths.checkpoints, token=args.hf_token,
+        )
+        logger.info("downloaded %s/%s -> %s", args.hf_repo_id, args.hf_filename, checkpoint_path)
+    else:
+        checkpoint_path = args.checkpoint
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model, stored_config = load_checkpoint(args.checkpoint, device)
+    model, stored_config = load_checkpoint(checkpoint_path, device)
 
     overrides = parse_overrides(args.overrides)
     cfg = (load_config(args.config, overrides) if args.config

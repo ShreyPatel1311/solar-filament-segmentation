@@ -16,6 +16,7 @@ import argparse
 import json
 from pathlib import Path
 
+from filseg import hub
 from filseg.config import load_config, parse_overrides
 from filseg.data.dataset import build_dataloaders
 from filseg.engine.trainer import Trainer
@@ -35,6 +36,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-root", type=Path, default=None)
     parser.add_argument("--set", dest="overrides", action="append", default=[],
                         metavar="section.key=value", help="Ad-hoc config override; repeatable.")
+    parser.add_argument("--hf-repo-id", default=None, metavar="USER/REPO",
+                        help="Push the best checkpoint here after training, overwriting "
+                             "--hf-filename. Needs HF_TOKEN (or --hf-token) with write access.")
+    parser.add_argument("--hf-filename", default=hub.DEFAULT_FILENAME)
+    parser.add_argument("--hf-token", default=None, help="Defaults to the HF_TOKEN env var.")
+    parser.add_argument("--hf-private", action="store_true",
+                        help="Create the Hub repo as private if it doesn't exist yet.")
     return parser.parse_args()
 
 
@@ -57,6 +65,14 @@ def main() -> None:
     trainer = Trainer(model, cfg, paths.checkpoints)
     result = trainer.fit(train_loader, val_loader)
     logger.info("done: %s", json.dumps(result))
+
+    if args.hf_repo_id:
+        url = hub.upload_checkpoint(
+            result["checkpoint"], args.hf_repo_id, filename=args.hf_filename,
+            token=args.hf_token, private=args.hf_private,
+        )
+        logger.info("pushed best checkpoint to %s as %s -> %s",
+                    args.hf_repo_id, args.hf_filename, url)
 
 
 if __name__ == "__main__":
