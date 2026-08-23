@@ -17,6 +17,8 @@ local edit  ->  git push  ->  Kaggle notebook clones the revision  ->  train/pre
 
 ```
 configs/                 experiment definitions (YAML) - one file per run
+requirements.txt         full pinned environment (local / reference)
+requirements-kaggle*.txt the few packages the Kaggle image lacks
 notebooks/
   kaggle_runner.ipynb    the only notebook: clone, install, train, predict
 scripts/
@@ -52,6 +54,11 @@ tests/                   unit tests for the metric, RLE and post-processing
 
 The notebook writes `/kaggle/working/submission.csv`, which you submit directly
 from the notebook output.
+
+Dependency versions are pinned in `requirements-kaggle.txt` and
+`requirements-kaggle-nodeps.txt`, not in the notebook, so fixing a broken
+dependency is a commit and a re-run rather than a notebook edit. The `--no-deps`
+half exists so pip cannot replace the image's preinstalled CUDA build of torch.
 
 For a final, reproducible run, set `REVISION` to a full commit SHA rather than
 `main`; the notebook prints the commit it actually ran.
