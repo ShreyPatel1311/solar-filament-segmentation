@@ -26,9 +26,21 @@ class DataConfig:
 @dataclass
 class ModelConfig:
     architecture: str = "unet"
+    in_channels: int = 1
+
+    # segmentation_models_pytorch backbones only; ignored by the improved
+    # U-Nets, which are trained from random init by design.
     encoder: str = "resnet34"
     encoder_weights: str | None = "imagenet"
-    in_channels: int = 1
+
+    # Liu et al. (2021) improved U-Nets. Defaults reproduce dilation-122436;
+    # aspp_rates: null disables ASPP, giving plain u-4floor.
+    stages: int | None = None
+    base_channels: int = 64
+    aspp_rates: list[int] | None = None
+    aspp_fusion: str = "sum"
+    dropout: float = 0.5
+    norm: bool = False
 
 
 @dataclass

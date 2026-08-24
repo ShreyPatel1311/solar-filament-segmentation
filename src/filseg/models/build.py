@@ -1,7 +1,14 @@
 """Model construction and checkpoint I/O.
 
-Architectures come from ``segmentation_models_pytorch`` so that swapping the
-encoder or decoder is a config change rather than a code change.
+Two families are available, both selected by ``model.architecture``:
+
+* ``segmentation_models_pytorch`` backbones (``unet``, ``fpn``, ...), which
+  accept a pretrained ImageNet encoder;
+* the Liu et al. (2021) improved U-Nets (``dilation-122436``, ``u-4floor``,
+  ``dilation-u4floor``), which have no pretrained weights and train from
+  random init -- see :mod:`filseg.models.improved_unet`.
+
+Swapping between them is a config change rather than a code change.
 """
 
 from __future__ import annotations
@@ -14,6 +21,11 @@ import torch
 from torch import nn
 
 from filseg.config import Config, ModelConfig
+from filseg.models.improved_unet import VARIANTS as _IMPROVED_VARIANTS
+from filseg.models.improved_unet import build_improved_unet
+from filseg.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 _ARCHITECTURES = {
     "unet": smp.Unet,
@@ -24,14 +36,39 @@ _ARCHITECTURES = {
 }
 
 
+def _normalize(name: str) -> str:
+    return name.lower().replace("-", "").replace("_", "")
+
+
 def build_model(cfg: ModelConfig) -> nn.Module:
     """Instantiate a single-logit segmentation network."""
+    key = _normalize(cfg.architecture)
+
+    if key in _IMPROVED_VARIANTS:
+        if cfg.encoder_weights:
+            # Silently ignoring this would look like pretrained weights loaded.
+            logger.warning(
+                "model.encoder_weights=%r is ignored by %s: the improved U-Nets have "
+                "no pretrained weights and train from random init.",
+                cfg.encoder_weights, cfg.architecture,
+            )
+        return build_improved_unet(
+            key,
+            in_channels=cfg.in_channels,
+            stages=cfg.stages,
+            base_channels=cfg.base_channels,
+            aspp_rates=tuple(cfg.aspp_rates) if cfg.aspp_rates else None,
+            aspp_fusion=cfg.aspp_fusion,
+            dropout=cfg.dropout,
+            norm=cfg.norm,
+        )
+
     try:
-        factory = _ARCHITECTURES[cfg.architecture.lower()]
+        factory = _ARCHITECTURES[key]
     except KeyError as exc:
         raise ValueError(
-            f"Unknown architecture '{cfg.architecture}'. "
-            f"Available: {sorted(_ARCHITECTURES)}"
+            f"Unknown architecture '{cfg.architecture}'. Available: "
+            f"{sorted(_ARCHITECTURES) + sorted(_IMPROVED_VARIANTS)}"
         ) from exc
 
     return factory(
