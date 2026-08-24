@@ -29,8 +29,13 @@ model:
   base_channels: 64
   aspp_fusion: sum      # DeepLab V2 style, as cited; try "concat" as an ablation
   dropout: 0.5
-  norm: false           # true adds BatchNorm to the U-Net body; helps if
-                        # training from scratch stalls early
+  # The paper only mentions BatchNorm inside ASPP, so this started false to
+  # match it -- but from-scratch (no pretrained weights) + this ASPP module's
+  # large receptive field (rate 36) + amp=true (fp16 overflows at ~65504) is
+  # unstable: logits drift unboundedly within the first few steps and blow up
+  # to nan (measured; see the improved-unets model docstring). true adds
+  # BatchNorm to the U-Net body, which fixed it in the same test.
+  norm: true
   encoder_weights: null
 
 train:
@@ -39,7 +44,7 @@ train:
   # since nothing is pretrained.
   epochs: 60
   batch_size: 4
-  lr: 0.001
+  lr: 0.0005   # halved from the from-scratch default as extra margin alongside norm: true
   weight_decay: 0.0001
   amp: true
   bce_weight: 0.5

@@ -47,9 +47,18 @@ class Trainer:
         self.scaler = torch.amp.GradScaler(self.device.type, enabled=self.use_amp)
         self.history: list[dict[str, float]] = []
 
+    #: Non-finite training losses tolerated within one epoch before fit() raises.
+    #: A run that has genuinely diverged (unstable from-scratch init, learning
+    #: rate too high for the architecture, fp16 overflow) produces far more
+    #: than this in its first few batches -- raising early turns a wasted
+    #: multi-hour Kaggle session into a few seconds of wasted compute instead.
+    #: Occasional isolated non-finite batches in an otherwise healthy run are
+    #: just skipped and don't count toward other epochs.
+    NON_FINITE_PATIENCE = 10
+
     def _train_epoch(self, loader: DataLoader) -> float:
         self.model.train()
-        total, batches = 0.0, 0
+        total, batches, non_finite = 0.0, 0, 0
         for batch in loader:
             images = batch["image"].to(self.device, non_blocking=True)
             targets = batch["mask"].to(self.device, non_blocking=True)
@@ -57,6 +66,19 @@ class Trainer:
             self.optimizer.zero_grad(set_to_none=True)
             with torch.autocast(self.device.type, enabled=self.use_amp):
                 loss = self.criterion(self.model(images), targets)
+
+            if not torch.isfinite(loss):
+                non_finite += 1
+                if non_finite > self.NON_FINITE_PATIENCE:
+                    raise FloatingPointError(
+                        f"{non_finite} non-finite training losses in this epoch -- the "
+                        "model has diverged. For the improved U-Nets (dilation-122436, "
+                        "u-4floor, ...) this usually means model.norm=false (no "
+                        "BatchNorm) is unstable at this train.lr, especially with "
+                        "train.amp=true (fp16 overflows at ~65504). Try model.norm=true "
+                        "and/or a lower train.lr before restarting."
+                    )
+                continue  # skip this batch: no backward, no optimizer step
 
             self.scaler.scale(loss).backward()
             if self.cfg.train.grad_clip:
@@ -67,6 +89,10 @@ class Trainer:
 
             total += float(loss.detach())
             batches += 1
+
+        if non_finite:
+            logger.warning("skipped %d non-finite training batch(es) this epoch",
+                           non_finite)
         return total / max(batches, 1)
 
     @torch.no_grad()

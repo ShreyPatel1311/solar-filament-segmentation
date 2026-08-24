@@ -11,6 +11,7 @@ model:
   in_channels: 1
   base_channels: 8
   encoder_weights: null
+  norm: true
 
 train:
   epochs: 1
