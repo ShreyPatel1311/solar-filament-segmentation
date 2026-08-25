@@ -180,9 +180,11 @@ class ImprovedUNet(nn.Module):
             paper's naming counts the 1x1 branch as "1", so ``(12, 24, 36)``
             is dilation-122436.
         aspp_fusion: ``sum`` (DeepLab V2, the paper's citation) or ``concat``.
-        dropout: dropout applied at the deepest expansion step, halved for
-            each shallower one -- Figure 6 shows both a 0.5 and a 0.2 dropout,
-            deeper first.
+        dropout: dropout at the deepest expansion step. Every figure's legend
+            (2, 6, 7, ...) shows exactly two dropout values, 0.5 and 0.2 --
+            not a progressively halved schedule -- so every shallower step
+            uses ``dropout_shallow`` instead, unchanged with depth.
+        dropout_shallow: dropout at every expansion step except the deepest.
         norm: BatchNorm inside the U-Net body (always on inside ASPP).
         grad_checkpoint: recompute activations in backward instead of storing
             them. Matters most for the ASPP variants -- the parallel dilated
@@ -193,8 +195,8 @@ class ImprovedUNet(nn.Module):
 
     def __init__(self, in_channels: int = 1, stages: int = 3, base_channels: int = 64,
                  aspp_rates: tuple[int, ...] | None = (12, 24, 36),
-                 aspp_fusion: str = "sum", dropout: float = 0.5, norm: bool = False,
-                 grad_checkpoint: bool = False):
+                 aspp_fusion: str = "sum", dropout: float = 0.5, dropout_shallow: float = 0.2,
+                 norm: bool = False, grad_checkpoint: bool = False):
         super().__init__()
         if stages < 2:
             raise ValueError(f"stages must be at least 2, got {stages}")
@@ -217,11 +219,12 @@ class ImprovedUNet(nn.Module):
         )
 
         self.decoders = nn.ModuleList()
-        for index in range(stages - 1, 0, -1):
-            # Deepest expansion step keeps the full dropout, shallower ones
-            # halve it, so the layer nearest the output -- which carries the
-            # finest filament detail -- is perturbed least.
-            level_dropout = dropout / 2 ** (stages - 1 - index)
+        for level, index in enumerate(range(stages - 1, 0, -1)):
+            # Every figure's legend shows exactly two dropout values (0.5 and
+            # 0.2), not a schedule -- the deepest expansion step gets the
+            # higher one, every shallower step (which carries finer filament
+            # detail) gets the lower one, unchanged with depth.
+            level_dropout = dropout if level == 0 else dropout_shallow
             self.decoders.append(
                 UpBlock(channels[index], channels[index - 1], channels[index - 1],
                         dropout=level_dropout, norm=norm, grad_checkpoint=grad_checkpoint)

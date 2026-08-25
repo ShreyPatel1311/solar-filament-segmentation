@@ -104,3 +104,14 @@ def test_checkpoint_round_trip_rebuilds_the_same_architecture(tmp_path):
     assert stored["model"]["architecture"] == "dilation-122436"
     for a, b in zip(model.state_dict().values(), restored.state_dict().values(), strict=True):
         assert torch.equal(a, b)
+
+
+def test_dropout_uses_exactly_the_papers_two_values_not_a_halving_schedule():
+    """Every figure's legend shows only 0.5 and 0.2 -- deepest step gets the
+    former, every shallower step (any depth) gets the latter, unchanged."""
+    model = ImprovedUNet(stages=5, dropout=0.5, dropout_shallow=0.2)  # u-4floor depth
+    rates = [
+        m.p for dec in model.decoders for m in dec.modules()
+        if isinstance(m, torch.nn.Dropout2d)
+    ]
+    assert rates == [0.5, 0.2, 0.2, 0.2]

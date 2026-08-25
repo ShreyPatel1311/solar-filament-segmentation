@@ -39,7 +39,11 @@ class ModelConfig:
     base_channels: int = 64
     aspp_rates: list[int] | None = None
     aspp_fusion: str = "sum"
+    # Every figure's legend shows exactly two dropout values (0.5, 0.2), not a
+    # depth-dependent schedule: dropout is the deepest expansion step's rate,
+    # dropout_shallow is every shallower step's rate.
     dropout: float = 0.5
+    dropout_shallow: float = 0.2
     norm: bool = False
     # Recompute activations in the backward pass instead of storing them.
     # Cuts peak memory a lot for ASPP variants (the parallel dilated branches

@@ -60,6 +60,7 @@ def build_model(cfg: ModelConfig) -> nn.Module:
             aspp_rates=tuple(cfg.aspp_rates) if cfg.aspp_rates else None,
             aspp_fusion=cfg.aspp_fusion,
             dropout=cfg.dropout,
+            dropout_shallow=cfg.dropout_shallow,
             norm=cfg.norm,
             grad_checkpoint=cfg.grad_checkpoint,
         )
