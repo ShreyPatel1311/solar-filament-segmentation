@@ -61,6 +61,7 @@ def build_model(cfg: ModelConfig) -> nn.Module:
             aspp_fusion=cfg.aspp_fusion,
             dropout=cfg.dropout,
             norm=cfg.norm,
+            grad_checkpoint=cfg.grad_checkpoint,
         )
 
     try:

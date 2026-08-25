@@ -56,14 +56,25 @@ class Trainer:
     #: just skipped and don't count toward other epochs.
     NON_FINITE_PATIENCE = 10
 
+    def _step(self) -> None:
+        if self.cfg.train.grad_clip:
+            self.scaler.unscale_(self.optimizer)
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.cfg.train.grad_clip)
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
+        self.optimizer.zero_grad(set_to_none=True)
+
     def _train_epoch(self, loader: DataLoader) -> float:
         self.model.train()
+        accumulation_steps = max(1, self.cfg.train.accumulation_steps)
         total, batches, non_finite = 0.0, 0, 0
-        for batch in loader:
+        pending = False
+        self.optimizer.zero_grad(set_to_none=True)
+
+        for step, batch in enumerate(loader):
             images = batch["image"].to(self.device, non_blocking=True)
             targets = batch["mask"].to(self.device, non_blocking=True)
 
-            self.optimizer.zero_grad(set_to_none=True)
             with torch.autocast(self.device.type, enabled=self.use_amp):
                 loss = self.criterion(self.model(images), targets)
 
@@ -80,15 +91,21 @@ class Trainer:
                     )
                 continue  # skip this batch: no backward, no optimizer step
 
-            self.scaler.scale(loss).backward()
-            if self.cfg.train.grad_clip:
-                self.scaler.unscale_(self.optimizer)
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.cfg.train.grad_clip)
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
+            # Averaging the loss before backward (rather than the gradients
+            # after) keeps a step's gradient magnitude the same regardless of
+            # accumulation_steps, so lr doesn't need retuning when it changes.
+            self.scaler.scale(loss / accumulation_steps).backward()
+            pending = True
+
+            if (step + 1) % accumulation_steps == 0:
+                self._step()
+                pending = False
 
             total += float(loss.detach())
             batches += 1
+
+        if pending:  # flush a final partial accumulation group
+            self._step()
 
         if non_finite:
             logger.warning("skipped %d non-finite training batch(es) this epoch",

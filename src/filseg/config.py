@@ -41,6 +41,12 @@ class ModelConfig:
     aspp_fusion: str = "sum"
     dropout: float = 0.5
     norm: bool = False
+    # Recompute activations in the backward pass instead of storing them.
+    # Cuts peak memory a lot for ASPP variants (the parallel dilated branches
+    # each hold a full-resolution feature map simultaneously) at the cost of
+    # one extra forward pass per step (~20-30% slower). Ignored by the
+    # segmentation_models_pytorch backbones.
+    grad_checkpoint: bool = False
 
 
 @dataclass
@@ -53,6 +59,10 @@ class TrainConfig:
     bce_weight: float = 0.5
     dice_weight: float = 0.5
     grad_clip: float = 1.0
+    # Backward passes to accumulate before an optimizer step, so
+    # batch_size x accumulation_steps is the effective batch size at a
+    # fraction of the peak memory. 1 disables it (step every batch).
+    accumulation_steps: int = 1
     seed: int = 1311
 
 

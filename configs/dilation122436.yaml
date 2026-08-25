@@ -37,13 +37,20 @@ model:
   # BatchNorm to the U-Net body, which fixed it in the same test.
   norm: true
   encoder_weights: null
+  # ASPP's 4 parallel dilated branches each hold a full-resolution feature
+  # map at once (256x256x256ch at image_size 1024, only 2 poolings before
+  # ASPP for a 3-stage variant) -- that's the dominant memory cost, and it
+  # OOM'd a 15GB GPU at batch_size 4. Recomputing activations in backward
+  # instead of storing them cuts peak memory a lot for ~20-30% more time.
+  grad_checkpoint: true
 
 train:
   # The paper trains with plain BCE; Dice is kept here because filaments cover
   # well under 1% of a MAGFiLO frame. lr is raised vs the ResNet-34 baseline
   # since nothing is pretrained.
   epochs: 60
-  batch_size: 4
+  batch_size: 2          # halved from 4 to fit under ASPP's memory footprint
+  accumulation_steps: 2  # batch_size x this = effective batch 4, unchanged
   lr: 0.0005   # halved from the from-scratch default as extra margin alongside norm: true
   weight_decay: 0.0001
   amp: true

@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import torch
 from torch import nn
+from torch.utils.checkpoint import checkpoint
 
 
 class ConvBlock(nn.Module):
@@ -46,7 +47,8 @@ class ConvBlock(nn.Module):
     ``model.norm`` when training from scratch proves unstable.
     """
 
-    def __init__(self, in_channels: int, out_channels: int, norm: bool = False):
+    def __init__(self, in_channels: int, out_channels: int, norm: bool = False,
+                 grad_checkpoint: bool = False):
         super().__init__()
         layers: list[nn.Module] = []
         for channels in (in_channels, out_channels):
@@ -56,8 +58,11 @@ class ConvBlock(nn.Module):
                 layers.append(nn.BatchNorm2d(out_channels))
             layers.append(nn.ReLU(inplace=True))
         self.block = nn.Sequential(*layers)
+        self.grad_checkpoint = grad_checkpoint
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.grad_checkpoint and self.training:
+            return checkpoint(self.block, x, use_reentrant=False)
         return self.block(x)
 
 
@@ -79,11 +84,13 @@ class ASPP(nn.Module):
     """
 
     def __init__(self, in_channels: int, out_channels: int,
-                 rates: tuple[int, ...] = (12, 24, 36), fusion: str = "sum"):
+                 rates: tuple[int, ...] = (12, 24, 36), fusion: str = "sum",
+                 grad_checkpoint: bool = False):
         super().__init__()
         if fusion not in {"sum", "concat"}:
             raise ValueError(f"ASPP fusion must be 'sum' or 'concat', got {fusion!r}")
         self.fusion = fusion
+        self.grad_checkpoint = grad_checkpoint
 
         branches: list[nn.Module] = [
             nn.Sequential(
@@ -115,7 +122,10 @@ class ASPP(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        outputs = [branch(x) for branch in self.branches]
+        if self.grad_checkpoint and self.training:
+            outputs = [checkpoint(branch, x, use_reentrant=False) for branch in self.branches]
+        else:
+            outputs = [branch(x) for branch in self.branches]
         if self.fusion == "concat":
             return self.project(torch.cat(outputs, dim=1))
         return torch.stack(outputs, dim=0).sum(dim=0)
@@ -132,14 +142,15 @@ class UpBlock(nn.Module):
     """
 
     def __init__(self, in_channels: int, skip_channels: int, out_channels: int,
-                 dropout: float = 0.0, norm: bool = False):
+                 dropout: float = 0.0, norm: bool = False, grad_checkpoint: bool = False):
         super().__init__()
         self.up = nn.Sequential(
             nn.Upsample(scale_factor=2, mode="nearest"),
             nn.Conv2d(in_channels, out_channels, kernel_size=2, padding="same"),
             nn.ReLU(inplace=True),
         )
-        self.block = ConvBlock(out_channels + skip_channels, out_channels, norm=norm)
+        self.block = ConvBlock(out_channels + skip_channels, out_channels, norm=norm,
+                               grad_checkpoint=grad_checkpoint)
         # Section 3.3.1: dropout sits in the expansion path, not the contraction
         # path -- "dropout operation in the upsampling stage can effectively
         # avoid overfitting".
@@ -173,11 +184,17 @@ class ImprovedUNet(nn.Module):
             each shallower one -- Figure 6 shows both a 0.5 and a 0.2 dropout,
             deeper first.
         norm: BatchNorm inside the U-Net body (always on inside ASPP).
+        grad_checkpoint: recompute activations in backward instead of storing
+            them. Matters most for the ASPP variants -- the parallel dilated
+            branches at the deepest, largest-spatial-resolution stage (only
+            ``stages - 1`` poolings happen before ASPP) each hold a full
+            feature map at once, which is the dominant memory cost at 1024px.
     """
 
     def __init__(self, in_channels: int = 1, stages: int = 3, base_channels: int = 64,
                  aspp_rates: tuple[int, ...] | None = (12, 24, 36),
-                 aspp_fusion: str = "sum", dropout: float = 0.5, norm: bool = False):
+                 aspp_fusion: str = "sum", dropout: float = 0.5, norm: bool = False,
+                 grad_checkpoint: bool = False):
         super().__init__()
         if stages < 2:
             raise ValueError(f"stages must be at least 2, got {stages}")
@@ -187,12 +204,14 @@ class ImprovedUNet(nn.Module):
         self.encoders = nn.ModuleList()
         previous = in_channels
         for width in channels:
-            self.encoders.append(ConvBlock(previous, width, norm=norm))
+            self.encoders.append(ConvBlock(previous, width, norm=norm,
+                                           grad_checkpoint=grad_checkpoint))
             previous = width
         self.pool = nn.MaxPool2d(2)
 
         self.aspp = (
-            ASPP(channels[-1], channels[-1], tuple(aspp_rates), fusion=aspp_fusion)
+            ASPP(channels[-1], channels[-1], tuple(aspp_rates), fusion=aspp_fusion,
+                grad_checkpoint=grad_checkpoint)
             if aspp_rates
             else nn.Identity()
         )
@@ -205,7 +224,7 @@ class ImprovedUNet(nn.Module):
             level_dropout = dropout / 2 ** (stages - 1 - index)
             self.decoders.append(
                 UpBlock(channels[index], channels[index - 1], channels[index - 1],
-                        dropout=level_dropout, norm=norm)
+                        dropout=level_dropout, norm=norm, grad_checkpoint=grad_checkpoint)
             )
 
         # Figure 2/6 end with a narrow 2-channel 3x3 convolution before the 1x1

@@ -12,10 +12,12 @@ model:
   base_channels: 8
   encoder_weights: null
   norm: true
+  grad_checkpoint: true
 
 train:
   epochs: 1
   batch_size: 2
+  accumulation_steps: 2
   amp: false
 
 postprocess:
