@@ -56,6 +56,43 @@ class Trainer:
     #: just skipped and don't count toward other epochs.
     NON_FINITE_PATIENCE = 10
 
+    def _recover_poisoned_batchnorm(self) -> int:
+        """Reset any BatchNorm layer whose running stats have gone non-finite.
+
+        BatchNorm updates running_mean/running_var as a side effect of every
+        forward call in *training* mode -- before a loss-finiteness check can
+        ever run. Once a running stat is non-finite, it is non-finite forever:
+        the update is an exponential moving average, ``running = (1 -
+        momentum) * running + momentum * batch_stat``, and ``(1 - momentum) *
+        nan`` is ``nan`` regardless of what every later batch looks like.
+        Train-mode forward passes are unaffected (they normalize with the
+        current batch's own statistics), so training loss can look
+        completely healthy for the rest of the run while eval-mode inference
+        -- which uses the running stats -- is silently nan forever after.
+        Confirmed by direct reproduction: one non-finite forward pass
+        permanently poisons every BatchNorm layer in the model.
+
+        Skipping the optimizer step for a non-finite batch (as
+        ``_train_epoch`` already does) prevents a bad *gradient* from
+        landing, but does nothing about this: the poisoning happens inside
+        the forward call that produced the loss, before that check runs.
+        This is the other half of the guard -- called right after any
+        non-finite loss is detected, so a rare numerical hiccup costs a few
+        batches of re-warming a layer's statistics instead of every epoch's
+        validation for the rest of the run.
+        """
+        reset = []
+        for name, module in self.model.named_modules():
+            if isinstance(module, torch.nn.modules.batchnorm._BatchNorm):
+                mean_ok = module.running_mean is None or torch.isfinite(module.running_mean).all()
+                var_ok = module.running_var is None or torch.isfinite(module.running_var).all()
+                if not (mean_ok and var_ok):
+                    module.reset_running_stats()
+                    reset.append(name)
+        if reset:
+            logger.warning("reset non-finite BatchNorm running stats in: %s", reset)
+        return len(reset)
+
     def _step(self) -> None:
         if self.cfg.train.grad_clip:
             self.scaler.unscale_(self.optimizer)
@@ -80,6 +117,7 @@ class Trainer:
 
             if not torch.isfinite(loss):
                 non_finite += 1
+                self._recover_poisoned_batchnorm()
                 if non_finite > self.NON_FINITE_PATIENCE:
                     raise FloatingPointError(
                         f"{non_finite} non-finite training losses in this epoch -- the "

@@ -77,18 +77,27 @@ class _ChannelAttention(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         query, key, value = self.query(x), self.key(x), self.value(x)
 
-        similarity = self._similarity(query, key)
-        # "the normalization factor, sqrt(H), is set to balance the scale
-        # differences arising from features of different dimensions, thus
-        # stabilizing the gradients. H denotes the height of the feature map,
-        # and in the current work, H and W are equal."
-        similarity = similarity / math.sqrt(x.shape[-2])
+        # T is an unscaled dot product over the full spatial extent (the
+        # paper's sqrt(H) only applies after it), so at real training
+        # resolution under amp=true this can overflow fp16 (max ~65504)
+        # before it's ever divided down. Forcing this one computation to
+        # fp32 costs nothing measurable (it's a handful of ops per block)
+        # and follows the same paper's formula exactly, just without fp16's
+        # narrow range -- everything else in the block still runs under the
+        # ambient autocast policy.
+        with torch.autocast(device_type=x.device.type, enabled=False):
+            similarity = self._similarity(query.float(), key.float())
+            # "the normalization factor, sqrt(H), is set to balance the scale
+            # differences arising from features of different dimensions, thus
+            # stabilizing the gradients. H denotes the height of the feature
+            # map, and in the current work, H and W are equal."
+            similarity = similarity / math.sqrt(x.shape[-2])
 
-        # Global average pooling over the spatial dims -> one score per channel.
-        scores = similarity.mean(dim=(-2, -1))
-        weights = torch.softmax(scores, dim=1)
+            # Global average pooling over the spatial dims -> one score per channel.
+            scores = similarity.mean(dim=(-2, -1))
+            weights = torch.softmax(scores, dim=1)
 
-        reweighted = value * weights[:, :, None, None]
+        reweighted = value * weights[:, :, None, None].to(value.dtype)
         return self.activation(self.norm(reweighted + x))
 
 
