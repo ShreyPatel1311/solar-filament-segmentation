@@ -23,7 +23,8 @@ notebooks/
   kaggle_runner.ipynb    train (+ optionally push the best checkpoint to HF Hub)
   kaggle_submit.ipynb    submission-only: pull a checkpoint from HF Hub, predict
 scripts/
-  train.py               fit a model; --hf-repo-id pushes the best checkpoint
+  train.py               fit a model
+  train_parallel.py      fit several configs at once, one per GPU; --hf-repo-id pushes the best checkpoint
   evaluate.py            score a checkpoint with the leaderboard metric (PQ)
   predict.py             write submission.csv; --checkpoint or --hf-repo-id
 src/filseg/
@@ -35,7 +36,11 @@ src/filseg/
     dataset.py           torch Dataset + dataloaders, deterministic split
     transforms.py        augmentation pipelines
     solar_disk.py        fits the solar disk; suppresses off-limb false positives
-  models/build.py        architecture zoo + checkpoint I/O
+  models/
+    build.py             architecture zoo + checkpoint I/O
+    improved_unet.py     Liu et al. (2021) improved U-Nets
+    flat_unet.py         Zhu et al. (2025) Flat U-Net (SCA/CSA attention)
+    vanilla_unet.py      Diercke et al. (2024) plain U-Net
   engine/
     losses.py            BCE + soft Dice
     metrics.py           Panoptic Quality, Dice, IoU
@@ -131,6 +136,33 @@ To push/pull via HF Hub locally, the same flags as on Kaggle apply:
 python scripts/train.py   --config configs/unet_resnet34.yaml --hf-repo-id you/filament-unet-r34
 python scripts/predict.py --hf-repo-id you/filament-unet-r34
 ```
+
+## Architectures
+
+Selected with `model.architecture`; all four families share the same data
+pipeline, loss, trainer and post-processing, so runs are directly comparable.
+
+| `architecture` | Source | Params | Notes |
+| --- | --- | --- | --- |
+| `unet` (+ `fpn`, `manet`, ...) | smp | ~24M | Pretrained ImageNet encoder |
+| `dilation-122436` | Liu et al. 2021 | ~3.7M | ASPP, best on *high-quality* input in its paper |
+| `flat-unet` | Zhu et al. 2025 | ~0.3M | Flat channels + channel attention; validated on cloud-contaminated frames |
+| `diercke-unet` | Diercke et al. 2024 | ~31M | Plain Ronneberger U-Net, from scratch |
+
+### Training two at once
+
+Kaggle's T4 x2 is two independent 15GB GPUs, but one training run uses only
+`cuda:0`. `scripts/train_parallel.py` runs one config per GPU as separate
+processes, so two models cost about the wall-clock of one:
+
+```bash
+python scripts/train_parallel.py configs/flat_unet.yaml configs/diercke_unet.yaml
+```
+
+Each subprocess gets `CUDA_VISIBLE_DEVICES` pinned to one device and sees it
+as `cuda:0`, so `train.py` needs no knowledge of the arrangement. Output is
+interleaved and tagged per config; each run writes its own checkpoints, and
+the launcher refuses to start if two configs share a `name:`.
 
 ## Method
 

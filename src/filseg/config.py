@@ -45,6 +45,20 @@ class ModelConfig:
     dropout: float = 0.5
     dropout_shallow: float = 0.2
     norm: bool = False
+
+    # Zhu et al. (2025) Flat U-Net. channels is the flat width C (the paper's
+    # accuracy/size knee is 32); depth is the number of encoder layers.
+    # *_blocks select "sca" (cheap, self-only) or "csa" (full interchannel)
+    # attention per position; the paper recommends SCA body + CSA bottleneck.
+    channels: int = 32
+    encoder_blocks: str = "sca"
+    decoder_blocks: str = "sca"
+    bottleneck_block: str = "csa"
+
+    # Encoder depth for flat-unet and diercke-unet (the Liu et al. improved
+    # U-Nets use `stages` instead, kept separate so their defaults can differ).
+    depth: int | None = None
+
     # Recompute activations in the backward pass instead of storing them.
     # Cuts peak memory a lot for ASPP variants (the parallel dilated branches
     # each hold a full-resolution feature map simultaneously) at the cost of

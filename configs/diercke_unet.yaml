@@ -1,0 +1,56 @@
+# The segmentation half of Diercke et al. (2024), arXiv:2402.15407.
+#
+# Plain Ronneberger U-Net (23 conv layers) trained from random init. NOT the
+# same as configs/unet_resnet34.yaml, which is smp's U-Net with a pretrained
+# ImageNet ResNet-34 encoder.
+#
+# What is deliberately NOT reproduced: the paper's semi-supervised
+# YOLOv5 -> pseudo-label -> U-Net pipeline. It needs ChroTel manual labels
+# (external ground truth, which the competition rules exclude) and exists to
+# manufacture labels where none are available -- MAGFiLO already has expert
+# annotations, which are strictly better. See the module docstring in
+# filseg/models/vanilla_unet.py.
+#
+# Their reported u-net numbers on GONG: accuracy 92.4%, recall 93.2%,
+# precision 49.8% -- high recall, low precision, i.e. it over-segments. Worth
+# watching under PQ, which charges 0.5 for every spurious segment.
+name: diercke_unet
+
+data:
+  image_size: 1024       # the paper's working resolution for GONG
+  val_fraction: 0.15
+  split_seed: 1311       # identical to every other config, so runs compare
+  num_workers: 2
+  limbo_margin: 0.98
+
+model:
+  architecture: diercke-unet
+  in_channels: 1
+  base_channels: 64      # the classical 64/128/256/512/1024 ladder
+  depth: 5
+  # The original U-Net has no normalization. Training from scratch without it
+  # diverged for dilation-122436 (see that config's notes), so it is on here
+  # from the start rather than after burning a session finding out.
+  norm: true
+  dropout: 0.2           # Zhu et al. (2019) added dropout to this lineage
+  grad_checkpoint: true  # 31M params at 1024px
+  encoder_weights: null
+
+train:
+  epochs: 60
+  batch_size: 2
+  accumulation_steps: 4  # effective batch 8
+  lr: 0.0003
+  weight_decay: 0.0001
+  amp: true
+  bce_weight: 0.5
+  dice_weight: 0.5
+  grad_clip: 1.0
+  seed: 1311
+
+postprocess:
+  threshold: 0.5
+  min_area: 120
+  closing_radius: 3
+  dilate_radius: 0
+  max_instances: 100

@@ -1,0 +1,56 @@
+# Flat U-Net from Zhu et al. (2025), arXiv:2502.07259.
+#
+# Ultralightweight: channels stay flat at C instead of doubling each stage, so
+# the whole model is ~0.3M parameters against the classical U-Net's ~29M.
+# Table 2 reports DSC 0.79 at C=32 (0.98 MB) vs 0.69 for the classical U-Net.
+#
+# Designed for exactly our situation: the authors deliberately do NOT remove
+# limb darkening or correct unevenness, and validate on cloud-contaminated
+# frames -- see Figure 5. That is a better match to GONG's ground-based noise
+# than the Liu et al. dilation-122436, which is the worst variant in its own
+# paper on low-quality input (Table 8).
+name: flat_unet
+
+data:
+  image_size: 1024
+  val_fraction: 0.15
+  split_seed: 1311       # identical to every other config, so runs compare
+  num_workers: 2
+  limbo_margin: 0.98
+
+model:
+  architecture: flat-unet
+  in_channels: 1
+  channels: 32           # the paper's accuracy/size knee; 128 buys DSC +0.02
+  depth: 4
+  # SCA body + CSA bottleneck: Table 3 shows the single bottleneck CSA lifting
+  # recall 0.6402 -> 0.6948 and DSC 0.7581 -> 0.7943 over an all-SCA network.
+  encoder_blocks: sca
+  decoder_blocks: sca
+  bottleneck_block: csa
+  # The attention blocks hold an (N, C, H, H) similarity tensor, so despite the
+  # tiny parameter count the activation memory at 1024px is what constrains
+  # batch size, not the weights.
+  grad_checkpoint: true
+  encoder_weights: null
+
+train:
+  # Paper: Adam, lr 1e-3, BCE. Dice is kept alongside BCE here because
+  # filaments cover well under 1% of a MAGFiLO frame.
+  epochs: 60
+  batch_size: 4
+  accumulation_steps: 2  # effective batch 8
+  lr: 0.001
+  weight_decay: 0.0001
+  amp: true
+  bce_weight: 0.5
+  dice_weight: 0.5
+  grad_clip: 1.0
+  seed: 1311
+
+postprocess:
+  threshold: 0.5
+  min_area: 120
+  closing_radius: 3
+  dilate_radius: 0
+  max_instances: 100

@@ -1,0 +1,6 @@
+# Fast end-to-end check for diercke-unet; CPU-friendly.
+name: smoke_diercke
+data: {image_size: 64, val_fraction: 0.5, num_workers: 0}
+model: {architecture: diercke-unet, base_channels: 8, depth: 3, norm: true, encoder_weights: null}
+train: {epochs: 1, batch_size: 2, amp: false}
+postprocess: {threshold: 0.5, min_area: 10, closing_radius: 1}
