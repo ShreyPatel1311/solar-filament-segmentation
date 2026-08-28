@@ -65,12 +65,16 @@ def main() -> None:
 
     pq = PanopticQuality()
     image_dice: list[float] = []
+    image_pq: list[float] = []
+    empty_predictions_with_gt = 0
     for i, record in enumerate(val_records, start=1):
         predictions = predict_instances(
             model, paths.train_images / record.file_name, cfg, device
         )
         targets = annotations.instance_masks(record)
-        pq.update(predictions, targets)
+        image_pq.append(pq.update(predictions, targets))
+        if not predictions and targets:
+            empty_predictions_with_gt += 1
 
         pred_union = np.zeros((record.height, record.width), dtype=np.uint8)
         for m in predictions:
@@ -78,10 +82,23 @@ def main() -> None:
         image_dice.append(_dice(pred_union, annotations.semantic_mask(record)))
 
         if i % 10 == 0:
-            logger.info("%d/%d images | running PQ %.4f", i, len(val_records), pq.score)
+            logger.info("%d/%d images | pooled PQ %.4f | mean per-image PQ %.4f",
+                       i, len(val_records), pq.score, float(np.mean(image_pq)))
 
     summary = {
         **pq.summary(),
+        # These two are genuinely different statistics, not just noise around
+        # each other: pooled PQ sums TP/FP/FN/IoU across every image before
+        # computing one PQ, so it's dominated by images with many instances.
+        # mean_image_pq scores each image independently then averages, so an
+        # image with few/no true positives (including a real miss -- see
+        # empty_predictions_with_gt) can swing it hard: one such image scores
+        # a flat 0.0 regardless of how well every other image did. Which one
+        # the competition's own scorer computes isn't stated in the rules, so
+        # report both rather than assume; a leaderboard score much closer to
+        # this one than to the pooled PQ above is a strong signal which.
+        "mean_image_pq": float(np.mean(image_pq)) if image_pq else 0.0,
+        "empty_predictions_with_gt": empty_predictions_with_gt,
         "mean_image_dice": float(np.mean(image_dice)) if image_dice else 0.0,
         "mean_matched_iou": float(np.mean(pq.matched_ious)) if pq.matched_ious else 0.0,
         "images": len(val_records),

@@ -145,6 +145,15 @@ def load_checkpoint(path: str | Path, device: str | torch.device = "cpu"
     """Rebuild the model described by a checkpoint and load its weights."""
     payload = torch.load(str(path), map_location=device, weights_only=False)
     model_cfg = ModelConfig(**payload["config"]["model"])
+    # The checkpoint's encoder_weights (e.g. "imagenet") is correct for what
+    # training started from, but reconstructing the model here is purely a
+    # vessel for load_state_dict below -- every weight gets overwritten by the
+    # trained checkpoint immediately after. Building with pretrained weights
+    # anyway would download and load them (~83MB for ResNet-34) only to
+    # discard them a line later, on every single evaluate.py/predict.py run.
+    # encoder_weights only affects initialization, not architecture shape, so
+    # forcing it off here changes nothing about the model that gets returned.
+    model_cfg.encoder_weights = None
     model = build_model(model_cfg)
     model.load_state_dict(payload["state_dict"])
     model.to(device).eval()
