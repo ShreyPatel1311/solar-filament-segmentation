@@ -21,7 +21,7 @@ from filseg.data.coco import IMAGE_SIZE, encode_rle
 from filseg.data.dataset import read_gray
 from filseg.data.solar_disk import disk_mask
 from filseg.data.transforms import val_transforms
-from filseg.postprocess import instances_from_probability
+from filseg.postprocess import instances_from_affinity, instances_from_probability
 from filseg.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -62,12 +62,51 @@ def predict_probability(model: nn.Module, image: np.ndarray, cfg: Config,
     return probability
 
 
+@torch.no_grad()
+def predict_probability_and_affinity(model: nn.Module, image: np.ndarray, cfg: Config,
+                                     device: torch.device
+                                     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Semantic probability plus [right, down] affinity, at native resolution.
+
+    A single forward pass, no flip-TTA: a horizontal flip swaps which
+    neighbor is "to the right" of a pixel, so naively flip-averaging the
+    right/down affinity channels the way :func:`predict_probability` does for
+    the semantic channel would silently mix affinity-to-the-right with
+    affinity-to-the-left. Getting that right needs remapping which channel
+    means what per flip, which isn't implemented -- so this trades away TTA's
+    small accuracy gain for correctness.
+    """
+    transform = val_transforms(cfg.data.image_size)
+    tensor = transform(image=image)["image"].float().unsqueeze(0).to(device)
+
+    logits = model(tensor).float()
+    probability = torch.sigmoid(logits[:, :1]).squeeze().cpu().numpy()
+    affinity_right = torch.sigmoid(logits[:, 1]).squeeze().cpu().numpy()
+    affinity_down = torch.sigmoid(logits[:, 2]).squeeze().cpu().numpy()
+
+    height, width = image.shape[:2]
+    if probability.shape != (height, width):
+        probability = cv2.resize(probability, (width, height), interpolation=cv2.INTER_LINEAR)
+        affinity_right = cv2.resize(affinity_right, (width, height), interpolation=cv2.INTER_LINEAR)
+        affinity_down = cv2.resize(affinity_down, (width, height), interpolation=cv2.INTER_LINEAR)
+    return probability, affinity_right, affinity_down
+
+
 def predict_instances(model: nn.Module, image_path: Path, cfg: Config,
                       device: torch.device, tta: bool = True) -> list[np.ndarray]:
     """All filament masks found in one image."""
     image = read_gray(image_path)
-    probability = predict_probability(model, image, cfg, device, tta=tta)
     valid = disk_mask(image, cfg.data.limbo_margin)
+
+    if cfg.model.affinity_head:
+        probability, affinity_right, affinity_down = predict_probability_and_affinity(
+            model, image, cfg, device
+        )
+        return instances_from_affinity(
+            probability, affinity_right, affinity_down, cfg.postprocess, valid_mask=valid
+        )
+
+    probability = predict_probability(model, image, cfg, device, tta=tta)
     return instances_from_probability(probability, cfg.postprocess, valid_mask=valid)
 
 

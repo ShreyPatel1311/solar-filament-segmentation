@@ -64,6 +64,12 @@ def build_model(cfg: ModelConfig) -> nn.Module:
     """Instantiate a single-logit segmentation network."""
     key = _normalize(cfg.architecture)
 
+    if cfg.affinity_head and key not in _ARCHITECTURES:
+        raise ValueError(
+            f"model.affinity_head=True is only supported for segmentation_models_pytorch "
+            f"architectures ({sorted(_ARCHITECTURES)}), not '{cfg.architecture}'."
+        )
+
     if key in _FLAT_VARIANTS:
         _warn_if_pretrained(cfg)
         return build_flat_unet(
@@ -117,7 +123,10 @@ def build_model(cfg: ModelConfig) -> nn.Module:
         encoder_name=cfg.encoder,
         encoder_weights=cfg.encoder_weights,
         in_channels=cfg.in_channels,
-        classes=1,
+        # channel 0: the usual semantic logit. channels 1:3, when
+        # affinity_head is on: right/bottom same-instance affinity logits,
+        # trained against filseg.data.affinity ground truth.
+        classes=3 if cfg.affinity_head else 1,
     )
 
 

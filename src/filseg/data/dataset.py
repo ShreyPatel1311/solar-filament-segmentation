@@ -11,6 +11,7 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 
 from filseg.config import Config
+from filseg.data.affinity import affinity_targets
 from filseg.data.coco import ImageRecord, MagfiloAnnotations
 from filseg.data.solar_disk import disk_mask
 from filseg.data.transforms import train_transforms, val_transforms
@@ -30,6 +31,11 @@ class FilamentDataset(Dataset):
     The target is the *union* of filaments; individual instances are recovered
     after inference by connected components (see :mod:`filseg.postprocess`),
     which keeps the model small enough to train inside a Kaggle session.
+
+    ``include_affinity=True`` additionally returns per-pixel "same instance as
+    my right/bottom neighbor?" ground truth (see :mod:`filseg.data.affinity`),
+    for models trained with an affinity head to directly learn where touching
+    filaments should be split rather than merged by connected components.
     """
 
     def __init__(
@@ -40,6 +46,7 @@ class FilamentDataset(Dataset):
         transform,
         apply_disk_mask: bool = True,
         disk_margin: float = 0.98,
+        include_affinity: bool = False,
     ):
         self.records = records
         self.images_dir = Path(images_dir)
@@ -47,6 +54,10 @@ class FilamentDataset(Dataset):
         self.transform = transform
         self.apply_disk_mask = apply_disk_mask
         self.disk_margin = disk_margin
+        # Opt-in: existing configs/checkpoints are unaffected, since batches
+        # without "affinity"/"affinity_valid" keys behave exactly as before
+        # everywhere downstream (Trainer, DiceBCELoss).
+        self.include_affinity = include_affinity
 
     def __len__(self) -> int:
         return len(self.records)
@@ -54,14 +65,44 @@ class FilamentDataset(Dataset):
     def __getitem__(self, index: int) -> dict[str, torch.Tensor | str]:
         record = self.records[index]
         image = read_gray(self.images_dir / record.file_name)
-        mask = self.annotations.semantic_mask(record)
 
-        if self.apply_disk_mask:
-            mask = mask * disk_mask(image, self.disk_margin)
+        if self.include_affinity:
+            instance_masks = self.annotations.instance_masks(record)
+            mask = np.zeros_like(image, dtype=np.uint8)
+            for instance in instance_masks:
+                np.maximum(mask, instance, out=mask)
+        else:
+            instance_masks = None
+            mask = self.annotations.semantic_mask(record)
 
-        augmented = self.transform(image=image, mask=mask)
+        valid_region = disk_mask(image, self.disk_margin) if self.apply_disk_mask else None
+        if valid_region is not None:
+            mask = mask * valid_region
+            if instance_masks is not None:
+                instance_masks = [m * valid_region for m in instance_masks]
+
+        if instance_masks is not None:
+            # Pass even an empty list: an image with zero filaments must still
+            # produce "affinity"/"affinity_valid" keys, or a batch mixing it
+            # with images that do have instances would collate inconsistently.
+            augmented = self.transform(image=image, mask=mask, masks=instance_masks)
+        else:
+            augmented = self.transform(image=image, mask=mask)
+
         target = augmented["mask"].float().unsqueeze(0)
-        return {"image": augmented["image"].float(), "mask": target, "stem": record.stem}
+        item: dict[str, torch.Tensor | str] = {
+            "image": augmented["image"].float(), "mask": target, "stem": record.stem,
+        }
+
+        if instance_masks is not None:
+            resized_instances = [
+                m.numpy() if hasattr(m, "numpy") else np.asarray(m) for m in augmented["masks"]
+            ]
+            affinity, valid = affinity_targets(resized_instances, target.shape[-2:])
+            item["affinity"] = torch.from_numpy(affinity)
+            item["affinity_valid"] = torch.from_numpy(valid)
+
+        return item
 
 
 def load_split(records: list[ImageRecord], val_fraction: float, seed: int
@@ -84,6 +125,7 @@ def build_dataloaders(cfg: Config, images_dir: Path, annotation_file: Path
         images_dir=images_dir,
         annotations=annotations,
         disk_margin=cfg.data.limbo_margin,
+        include_affinity=cfg.model.affinity_head,
     )
     train_ds = FilamentDataset(
         train_records, transform=train_transforms(cfg.data.image_size), **common

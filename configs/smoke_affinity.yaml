@@ -1,0 +1,6 @@
+# Fast end-to-end check for the affinity head; CPU-friendly.
+name: smoke_affinity
+data: {image_size: 64, val_fraction: 0.5, num_workers: 0}
+model: {architecture: unet, encoder: resnet18, encoder_weights: null, affinity_head: true}
+train: {epochs: 1, batch_size: 2, amp: false, affinity_weight: 1.0}
+postprocess: {threshold: 0.5, min_area: 10, closing_radius: 1}

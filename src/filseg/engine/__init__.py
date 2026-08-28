@@ -4,10 +4,13 @@
 torch) does not pull in the model zoo.
 """
 
-from filseg.engine.losses import DiceBCELoss
+from filseg.engine.losses import AffinityDiceBCELoss, DiceBCELoss
 from filseg.engine.metrics import PanopticQuality, dice_score, iou_score
 
-__all__ = ["DiceBCELoss", "PanopticQuality", "Trainer", "dice_score", "iou_score"]
+__all__ = [
+    "AffinityDiceBCELoss", "DiceBCELoss", "PanopticQuality", "Trainer",
+    "dice_score", "iou_score",
+]
 
 
 def __getattr__(name: str):

@@ -164,6 +164,24 @@ as `cuda:0`, so `train.py` needs no knowledge of the arrangement. Output is
 interleaved and tagged per config; each run writes its own checkpoints, and
 the launcher refuses to start if two configs share a `name:`.
 
+### Affinity head: learned instance separation
+
+Every architecture above predicts one thing per pixel -- "is this filament?"
+-- and instances are recovered afterward by connected components, which
+merges any two filaments that physically touch or cross. `model.affinity_head:
+true` (smp architectures only, e.g. `configs/unet_resnet34_affinity.yaml`)
+adds 2 extra output channels predicting whether a pixel shares its instance
+with its right/bottom neighbor, trained against ground truth derived from
+MAGFiLO's per-filament masks (`filseg/data/affinity.py`). Postprocessing then
+uses that prediction to decide whether to join two touching foreground pixels
+(`postprocess.instances_from_affinity`), instead of joining them
+unconditionally.
+
+Directly comparable to the equivalent non-affinity config -- same encoder,
+same `split_seed` -- so the way to check whether it actually helps is
+`scripts/evaluate.py` on both and comparing PQ, `one_to_many` and
+`many_to_one` specifically, since that's what this targets, not Dice.
+
 ## Method
 
 1. **Preprocess** — grayscale frame, solar disk fitted by Otsu + minimum

@@ -12,6 +12,21 @@ import numpy as np
 from albumentations.pytorch import ToTensorV2
 
 
+def _ensure_contiguous(mask: np.ndarray, **_kwargs) -> np.ndarray:
+    return np.ascontiguousarray(mask)
+
+
+# Flips/rotations leave albumentations' plural `masks=` list (used to carry
+# per-instance masks through to filseg.data.affinity) as negative-stride numpy
+# views; ToTensorV2 then fails with "tensors with negative strides are not
+# currently supported". A.Lambda(mask=...) is applied per-item to `masks` too
+# (DualTransform's default apply_to_masks loops apply_to_mask), so this fixes
+# both the singular and plural path in one place. It's a no-op when no
+# instance masks are passed. A named function, not a lambda, so this survives
+# pickling into DataLoader worker processes (num_workers > 0).
+_CONTIGUOUS = A.Lambda(mask=_ensure_contiguous)
+
+
 def train_transforms(image_size: int) -> A.Compose:
     return A.Compose(
         [
@@ -23,6 +38,7 @@ def train_transforms(image_size: int) -> A.Compose:
             A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.5),
             A.GaussNoise(var_limit=(2.0, 12.0), p=0.2),
             A.Normalize(mean=(0.5,), std=(0.25,), max_pixel_value=255.0),
+            _CONTIGUOUS,
             ToTensorV2(),
         ]
     )
@@ -33,6 +49,7 @@ def val_transforms(image_size: int) -> A.Compose:
         [
             A.Resize(image_size, image_size, interpolation=1),
             A.Normalize(mean=(0.5,), std=(0.25,), max_pixel_value=255.0),
+            _CONTIGUOUS,
             ToTensorV2(),
         ]
     )

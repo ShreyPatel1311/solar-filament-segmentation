@@ -66,6 +66,13 @@ class ModelConfig:
     # segmentation_models_pytorch backbones.
     grad_checkpoint: bool = False
 
+    # segmentation_models_pytorch architectures only: emit 2 extra output
+    # channels predicting right/bottom same-instance affinity alongside the
+    # usual semantic logit, trained against filseg.data.affinity ground
+    # truth. Lets postprocess.instances_from_affinity split touching
+    # filaments that connected components would otherwise merge into one.
+    affinity_head: bool = False
+
 
 @dataclass
 class TrainConfig:
@@ -76,6 +83,7 @@ class TrainConfig:
     amp: bool = True
     bce_weight: float = 0.5
     dice_weight: float = 0.5
+    affinity_weight: float = 1.0  # only used when model.affinity_head is true
     grad_clip: float = 1.0
     # Backward passes to accumulate before an optimizer step, so
     # batch_size x accumulation_steps is the effective batch size at a

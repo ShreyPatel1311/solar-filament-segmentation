@@ -15,7 +15,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from filseg.config import Config
-from filseg.engine.losses import DiceBCELoss
+from filseg.engine.losses import AffinityDiceBCELoss, DiceBCELoss
 from filseg.engine.metrics import dice_score, iou_score
 from filseg.models.build import save_checkpoint
 from filseg.utils.logging import get_logger
@@ -36,7 +36,11 @@ class Trainer:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        self.criterion = DiceBCELoss(cfg.train.bce_weight, cfg.train.dice_weight)
+        if cfg.model.affinity_head:
+            self.criterion = AffinityDiceBCELoss(cfg.train.bce_weight, cfg.train.dice_weight,
+                                                 cfg.train.affinity_weight)
+        else:
+            self.criterion = DiceBCELoss(cfg.train.bce_weight, cfg.train.dice_weight)
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(), lr=cfg.train.lr, weight_decay=cfg.train.weight_decay
         )
@@ -111,9 +115,16 @@ class Trainer:
         for step, batch in enumerate(loader):
             images = batch["image"].to(self.device, non_blocking=True)
             targets = batch["mask"].to(self.device, non_blocking=True)
+            # Present only when the dataset was built with include_affinity;
+            # DiceBCELoss ignores unknown kwargs' absence trivially since
+            # this dict is simply empty for every non-affinity config.
+            extra = {
+                key: batch[key].to(self.device, non_blocking=True)
+                for key in ("affinity", "affinity_valid") if key in batch
+            }
 
             with torch.autocast(self.device.type, enabled=self.use_amp):
-                loss = self.criterion(self.model(images), targets)
+                loss = self.criterion(self.model(images), targets, **extra)
 
             if not torch.isfinite(loss):
                 non_finite += 1
@@ -158,11 +169,18 @@ class Trainer:
         for batch in loader:
             images = batch["image"].to(self.device, non_blocking=True)
             targets = batch["mask"].to(self.device, non_blocking=True)
+            extra = {
+                key: batch[key].to(self.device, non_blocking=True)
+                for key in ("affinity", "affinity_valid") if key in batch
+            }
             with torch.autocast(self.device.type, enabled=self.use_amp):
                 logits = self.model(images)
-                loss = self.criterion(logits, targets)
+                loss = self.criterion(logits, targets, **extra)
 
-            predictions = (torch.sigmoid(logits.float()) >= threshold).float()
+            # Channel 0 only: with model.affinity_head on, logits also carries
+            # the two affinity channels, which Dice/IoU know nothing about.
+            semantic_logits = logits[:, :1]
+            predictions = (torch.sigmoid(semantic_logits.float()) >= threshold).float()
             batch_size = images.size(0)
             loss_sum += float(loss) * batch_size
             dice_sum += float(dice_score(predictions, targets).sum())

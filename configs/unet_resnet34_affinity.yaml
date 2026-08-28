@@ -1,0 +1,44 @@
+# Same as unet_resnet34.yaml, plus an affinity head: 2 extra output channels
+# predicting whether a pixel shares its instance with its right/bottom
+# neighbor (filseg.data.affinity). Postprocessing then splits touching
+# filaments using that prediction (postprocess.instances_from_affinity)
+# instead of blind connected-components, which merges anything touching.
+#
+# Directly comparable to unet_resnet34.yaml: same encoder, same split_seed,
+# only the extra loss term and postprocessing step differ. Run both through
+# evaluate.py and compare PQ, one_to_many and many_to_one specifically --
+# that's what this feature targets, not Dice.
+name: unet_r34_affinity
+
+data:
+  image_size: 1024
+  val_fraction: 0.15
+  split_seed: 1311
+  num_workers: 2
+  limbo_margin: 0.98
+
+model:
+  architecture: unet
+  encoder: resnet34
+  encoder_weights: imagenet
+  in_channels: 1
+  affinity_head: true
+
+train:
+  epochs: 40
+  batch_size: 4
+  lr: 0.0003
+  weight_decay: 0.0001
+  amp: true
+  bce_weight: 0.5
+  dice_weight: 0.5
+  affinity_weight: 1.0
+  grad_clip: 1.0
+  seed: 1311
+
+postprocess:
+  threshold: 0.5
+  min_area: 120
+  closing_radius: 3
+  dilate_radius: 0
+  max_instances: 100
