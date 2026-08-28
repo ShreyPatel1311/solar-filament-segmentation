@@ -13,3 +13,6 @@ submission*.csv
 
 # Local reference material - not redistributable, keep out of the public repo
 /Research Papers/
+
+# Local downloads from Kaggle (checkpoints, submissions, reports) - not source
+/results/
