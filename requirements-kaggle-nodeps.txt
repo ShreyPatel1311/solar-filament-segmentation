@@ -1,9 +1,0 @@
-# The segmentation-models-pytorch chain, installed with --no-deps so that pip
-# cannot swap out the Kaggle image's preinstalled CUDA build of torch or
-# torchvision. Every transitive dependency is either preinstalled on the image
-# (torch, torchvision, huggingface-hub, safetensors, tqdm, pillow, PyYAML) or
-# pinned in requirements-kaggle.txt (munch, for pretrainedmodels).
-segmentation-models-pytorch==0.3.4
-timm==0.9.7
-efficientnet-pytorch==0.7.1
-pretrainedmodels==0.7.4
